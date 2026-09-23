@@ -34,6 +34,10 @@ Client Browser
 - An [OpenRouter API key](https://openrouter.ai/keys)
 
 ---
+## Screenshot 
+![Screenshot](Screenshot.png)
+
+---
 
 ## 1. Local Testing with Docker Compose
 
