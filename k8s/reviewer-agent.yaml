@@ -1,0 +1,76 @@
+# Reviewer Agent — horizontally scalable deployment, internal only.
+#
+# Components:
+#   - Deployment (replicas: 2, configurable)
+#   - ClusterIP Service (internal access only, port 8001)
+#
+# IMPORTANT: Replace <YOUR_DOCKERHUB_USERNAME> with your Docker Hub username.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reviewer-agent
+  namespace: multi-agent
+  labels:
+    app: reviewer-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: reviewer-agent
+  template:
+    metadata:
+      labels:
+        app: reviewer-agent
+    spec:
+      containers:
+        - name: reviewer-agent
+          image: vikasteja/reviewer-agent:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8001
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: multi-agent-secrets
+                  key: DATABASE_URL
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: multi-agent-secrets
+                  key: OPENROUTER_API_KEY
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviewer-agent
+  namespace: multi-agent
+spec:
+  type: ClusterIP
+  selector:
+    app: reviewer-agent
+  ports:
+    - port: 8001
+      targetPort: 8001

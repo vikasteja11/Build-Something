@@ -1,0 +1,71 @@
+version: "3.9"
+
+services:
+  # -----------------------------------------------------------------------
+  # PostgreSQL database
+  # -----------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: multiagent
+      POSTGRES_PASSWORD: multiagent
+      POSTGRES_DB: multiagent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U multiagent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------------
+  # Coder Agent
+  # -----------------------------------------------------------------------
+  coder-agent:
+    build: ./coder-agent
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://multiagent:multiagent@postgres:5432/multiagent
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      REVIEWER_URL: http://reviewer-agent:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # -----------------------------------------------------------------------
+  # Reviewer Agent
+  # -----------------------------------------------------------------------
+  reviewer-agent:
+    build: ./reviewer-agent
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql://multiagent:multiagent@postgres:5432/multiagent
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # -----------------------------------------------------------------------
+  # Frontend Web UI
+  # -----------------------------------------------------------------------
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      CODER_AGENT_URL: http://coder-agent:8000
+      REVIEWER_AGENT_URL: http://reviewer-agent:8001
+    depends_on:
+      - coder-agent
+      - reviewer-agent
+
+volumes:
+  pgdata:

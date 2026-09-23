@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Agent Code Studio — ChatGPT Interface</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+  <div class="app-wrapper">
+    
+    <!-- Header -->
+    <header>
+      <div class="brand">
+        <div class="brand-icon">
+          <i class="fa-solid fa-crown"></i>
+        </div>
+        <div class="brand-title">
+          <h1>CODE <span>STUDIO</span></h1>
+          <p>Multi-Agent ChatGPT Stream (PostgreSQL Backed)</p>
+        </div>
+      </div>
+      
+      <div class="status-group">
+        <div class="status-badge">
+          <span class="status-dot" id="dot-coder"></span>
+          <span>coder-agent</span>
+        </div>
+        <div class="status-badge">
+          <span class="status-dot" id="dot-reviewer"></span>
+          <span>reviewer-agent</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 2-Panel Fullscreen Grid -->
+    <div class="chat-container">
+      
+      <!-- LEFT PANEL: CODER AGENT (ChatGPT Style) -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i class="fa-solid fa-bolt-lightning"></i>
+            <span>CODER AGENT</span>
+          </div>
+          <span class="agent-tag">Code Generation</span>
+        </div>
+
+        <!-- ChatGPT Message Stream -->
+        <div class="chat-stream" id="coder-chat-stream">
+          <div class="msg-row assistant" style="color: var(--text-muted); text-align: center; justify-content: center;">
+            Loading conversation history...
+          </div>
+        </div>
+
+        <!-- ChatGPT Prompt Bar at Bottom -->
+        <div class="prompt-bar-container">
+          <form id="chat-form" onsubmit="handleGenerate(event)">
+            <div class="prompt-bar">
+              <textarea id="spec-input" class="chat-input" placeholder="Message Coder Agent... (e.g. Write a Python function for binary search)" onkeydown="handleKeyDown(event)"></textarea>
+              <button type="submit" class="btn-send" id="btn-send" title="Send message">
+                <i class="fa-solid fa-arrow-up"></i>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- RIGHT PANEL: REVIEWER AGENT (ChatGPT Style) -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <i class="fa-solid fa-shield-halved"></i>
+            <span>REVIEWER AGENT</span>
+          </div>
+          <span class="agent-tag">Quality Review</span>
+        </div>
+
+        <!-- ChatGPT Message Stream -->
+        <div class="chat-stream" id="reviewer-chat-stream">
+          <div class="msg-row assistant" style="color: var(--text-muted); text-align: center; justify-content: center;">
+            Waiting for reviewer records...
+          </div>
+        </div>
+
+        <div class="prompt-bar-container" style="padding: 0.75rem 1rem; font-size: 0.78rem; color: var(--text-muted); display: flex; align-items: center; gap: 8px;">
+          <i class="fa-solid fa-database" style="color: var(--gold-primary);"></i>
+          <span>Database synchronised with PostgreSQL table.</span>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script>
+    let chatRecords = [];
+    const recordsMap = {};
+
+    // Health check
+    async function checkHealth() {
+      try {
+        const res = await fetch('/api/system-status');
+        const data = await res.json();
+        const dotCoder = document.getElementById('dot-coder');
+        const dotReviewer = document.getElementById('dot-reviewer');
+        if (data.coder_agent === 'online') dotCoder.classList.add('online');
+        else dotCoder.classList.remove('online');
+        if (data.reviewer_agent === 'online') dotReviewer.classList.add('online');
+        else dotReviewer.classList.remove('online');
+      } catch (err) {
+        console.error("Health check error:", err);
+      }
+    }
+
+    // Load full chat history from PostgreSQL
+    async function loadChatHistory() {
+      try {
+        const res = await fetch('/api/records');
+        chatRecords = await res.json();
+        
+        // Sort chronologically (oldest to newest for ChatGPT thread)
+        chatRecords.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+        chatRecords.forEach(record => {
+          recordsMap[record.spec_id] = record;
+        });
+
+        renderChatHistory();
+      } catch (err) {
+        console.error("Failed to load records:", err);
+      }
+    }
+
+    // Render ChatGPT style messages in both panels
+    function renderChatHistory() {
+      const coderStream = document.getElementById('coder-chat-stream');
+      const reviewerStream = document.getElementById('reviewer-chat-stream');
+
+      if (!chatRecords || chatRecords.length === 0) {
+        coderStream.innerHTML = '<div class="msg-row assistant" style="color: var(--text-muted); text-align: center; justify-content: center;">No messages yet. Send a prompt below!</div>';
+        reviewerStream.innerHTML = '<div class="msg-row assistant" style="color: var(--text-muted); text-align: center; justify-content: center;">Reviewer Agent ready.</div>';
+        return;
+      }
+
+      let coderHTML = '';
+      let reviewerHTML = '';
+
+      chatRecords.forEach((record, index) => {
+        const timeStr = record.created_at ? new Date(record.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+        
+        // Coder Stream: User message row + Coder response row
+        coderHTML += `
+          <!-- User Prompt -->
+          <div class="msg-row user">
+            <div class="avatar user-av"><i class="fa-solid fa-user"></i></div>
+            <div class="msg-body">
+              <div class="msg-author">You <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: normal;">${timeStr}</span></div>
+              <div class="msg-text">${escapeHtml(record.spec)}</div>
+            </div>
+          </div>
+
+          <!-- Coder Response -->
+          <div class="msg-row assistant">
+            <div class="avatar coder-av"><i class="fa-solid fa-bolt-lightning"></i></div>
+            <div class="msg-body">
+              <div class="msg-author">Coder Agent</div>
+              <div class="chat-code-wrapper">
+                <div class="chat-code-header">
+                  <span><i class="fa-brands fa-python"></i> python</span>
+                  <button class="copy-btn" onclick="copyCode('${record.spec_id}')"><i class="fa-regular fa-copy"></i> Copy code</button>
+                </div>
+                <pre><code>${escapeHtml(record.generated_code || '# No code returned')}</code></pre>
+              </div>
+              <div style="margin-top: 0.5rem;">
+                ${record.review_comments ? 
+                  `<span style="font-size: 0.75rem; color: var(--gold-primary); font-weight: 600;"><i class="fa-solid fa-circle-check"></i> Reviewed</span>` : 
+                  `<button class="btn-action" onclick="triggerReview('${record.spec_id}')"><i class="fa-solid fa-magnifying-glass"></i> Request Review</button>`
+                }
+              </div>
+            </div>
+          </div>
+        `;
+
+        // Reviewer Stream: Reviewer response row
+        if (record.review_comments) {
+          const verdict = (record.verdict || 'unknown').toLowerCase();
+          reviewerHTML += `
+            <div class="msg-row assistant">
+              <div class="avatar reviewer-av"><i class="fa-solid fa-shield-halved"></i></div>
+              <div class="msg-body">
+                <div class="msg-author">
+                  Reviewer Agent #${index + 1}
+                  <span class="badge-verdict ${verdict === 'pass' ? 'pass' : (verdict === 'needs-work' ? 'needs-work' : 'error')}">
+                    ${verdict.toUpperCase()}
+                  </span>
+                </div>
+                <div class="msg-text">${escapeHtml(record.review_comments)}</div>
+                <div style="margin-top: 0.8rem;">
+                  <button class="btn-action" style="background: linear-gradient(135deg, var(--gold-primary), var(--gold-dark)); color: #050505; border: none; font-weight: 800; font-size: 0.76rem;" onclick="triggerRefactor('${record.spec_id}')">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> Implement Suggestions & Refactor Code
+                  </button>
+                </div>
+              </div>
+            </div>
+          `;
+        } else {
+          reviewerHTML += `
+            <div class="msg-row assistant" style="opacity: 0.5;">
+              <div class="avatar reviewer-av"><i class="fa-solid fa-clock"></i></div>
+              <div class="msg-body">
+                <div class="msg-author">Reviewer Agent #${index + 1}</div>
+                <div class="msg-text" style="color: var(--text-muted); font-style: italic;">Pending review request from Coder Agent...</div>
+              </div>
+            </div>
+          `;
+        }
+      });
+
+      coderStream.innerHTML = coderHTML;
+      reviewerStream.innerHTML = reviewerHTML;
+
+      scrollToBottom();
+    }
+
+    function scrollToBottom() {
+      const coderStream = document.getElementById('coder-chat-stream');
+      const reviewerStream = document.getElementById('reviewer-chat-stream');
+      coderStream.scrollTop = coderStream.scrollHeight;
+      reviewerStream.scrollTop = reviewerStream.scrollHeight;
+    }
+
+    function handleKeyDown(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        document.getElementById('chat-form').requestSubmit();
+      }
+    }
+
+    // Step 1: Generate Code
+    async function handleGenerate(e) {
+      e.preventDefault();
+      const specInput = document.getElementById('spec-input');
+      const spec = specInput.value.trim();
+      if (!spec) return;
+
+      const btnSend = document.getElementById('btn-send');
+      btnSend.disabled = true;
+
+      // Append temporary User & Coder loading rows directly in ChatGPT stream
+      const coderStream = document.getElementById('coder-chat-stream');
+      
+      const tempUserRow = document.createElement('div');
+      tempUserRow.className = 'msg-row user';
+      tempUserRow.innerHTML = `
+        <div class="avatar user-av"><i class="fa-solid fa-user"></i></div>
+        <div class="msg-body">
+          <div class="msg-author">You</div>
+          <div class="msg-text">${escapeHtml(spec)}</div>
+        </div>
+      `;
+      coderStream.appendChild(tempUserRow);
+
+      const tempCoderRow = document.createElement('div');
+      tempCoderRow.className = 'msg-row assistant';
+      tempCoderRow.innerHTML = `
+        <div class="avatar coder-av"><i class="fa-solid fa-bolt-lightning"></i></div>
+        <div class="msg-body">
+          <div class="msg-author">Coder Agent</div>
+          <div class="msg-text" style="color: var(--gold-primary);"><i class="fa-solid fa-spinner fa-spin"></i> Generating code via OpenRouter...</div>
+        </div>
+      `;
+      coderStream.appendChild(tempCoderRow);
+      coderStream.scrollTop = coderStream.scrollHeight;
+
+      specInput.value = '';
+
+      try {
+        const res = await fetch('/api/generate-only', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ spec })
+        });
+
+        await res.json();
+        
+        // Reload full history from DB
+        await loadChatHistory();
+
+      } catch (err) {
+        tempCoderRow.querySelector('.msg-text').innerHTML = `<span style="color: #ef4444;">Error generating code: ${err.message}</span>`;
+      } finally {
+        btnSend.disabled = false;
+      }
+    }
+
+    // Step 2: Trigger Review
+    async function triggerReview(specId) {
+      const record = recordsMap[specId];
+      if (!record) return;
+
+      const reviewerStream = document.getElementById('reviewer-chat-stream');
+      
+      const tempReviewRow = document.createElement('div');
+      tempReviewRow.className = 'msg-row assistant';
+      tempReviewRow.innerHTML = `
+        <div class="avatar reviewer-av"><i class="fa-solid fa-shield-halved"></i></div>
+        <div class="msg-body">
+          <div class="msg-author">Reviewer Agent</div>
+          <div class="msg-text" style="color: var(--gold-primary);"><i class="fa-solid fa-spinner fa-spin"></i> Analyzing code quality & bugs...</div>
+        </div>
+      `;
+      reviewerStream.appendChild(tempReviewRow);
+      reviewerStream.scrollTop = reviewerStream.scrollHeight;
+
+      try {
+        const res = await fetch('/api/review-only', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            spec_id: specId,
+            spec: record.spec,
+            code: record.generated_code || ''
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || "Review failed");
+        }
+
+        await res.json();
+
+        // Reload full history from DB
+        await loadChatHistory();
+
+      } catch (err) {
+        tempReviewRow.querySelector('.msg-text').innerHTML = `<span style="color: #ef4444;">Error reviewing code: ${err.message}</span>`;
+      }
+    }
+
+    // Step 3: Trigger Refactor / Implement Suggestions
+    async function triggerRefactor(specId) {
+      const record = recordsMap[specId];
+      if (!record) return;
+
+      const coderStream = document.getElementById('coder-chat-stream');
+      
+      const tempRefactorRow = document.createElement('div');
+      tempRefactorRow.className = 'msg-row assistant';
+      tempRefactorRow.innerHTML = `
+        <div class="avatar coder-av"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+        <div class="msg-body">
+          <div class="msg-author">Coder Agent</div>
+          <div class="msg-text" style="color: var(--gold-primary);"><i class="fa-solid fa-spinner fa-spin"></i> Implementing reviewer suggestions & refactoring code...</div>
+        </div>
+      `;
+      coderStream.appendChild(tempRefactorRow);
+      coderStream.scrollTop = coderStream.scrollHeight;
+
+      try {
+        const res = await fetch('/api/refactor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            spec_id: specId,
+            original_spec: record.spec,
+            code: record.generated_code || '',
+            review_comments: record.review_comments || ''
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || "Refactoring failed");
+        }
+
+        await res.json();
+
+        // Reload full history from DB — newly refactored code appears in Coder Chat!
+        await loadChatHistory();
+
+      } catch (err) {
+        tempRefactorRow.querySelector('.msg-text').innerHTML = `<span style="color: #ef4444;">Error refactoring code: ${err.message}</span>`;
+      }
+    }
+
+    function copyCode(specId) {
+      const record = recordsMap[specId];
+      if (record && record.generated_code) {
+        navigator.clipboard.writeText(record.generated_code);
+        alert("Code copied to clipboard!");
+      }
+    }
+
+    function escapeHtml(str) {
+      return str ? str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : '';
+    }
+
+    checkHealth();
+    loadChatHistory();
+    setInterval(checkHealth, 10000);
+  </script>
+</body>
+</html>
